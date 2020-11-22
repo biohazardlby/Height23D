@@ -1,9 +1,11 @@
-#include <fstream>
 #include "Primitives.h"
 #include "OBJ_File_Helper.h"
+#include "Algorithm.h"
+#include "CVUtility.h"
 
 #include <opencv2/opencv.hpp>
-
+#include <fstream>
+#include <time.h>
 using std::cout;
 using std::endl;
 
@@ -12,87 +14,33 @@ using std::endl;
 #define RIGHT_KEYCODE 2555904 
 #define DOWN_KEYCODE 2621440
 
+#define USE_LEGACY false
 
-void test_OBJ() {
-	Vertex** vertices = new Vertex * [4];
-	vertices[0] = new Vertex{ -1,0,1 };
-	vertices[1] = new Vertex{ 1,1,1 };
-	vertices[2] = new Vertex{ 1,0,-1 };
-	vertices[3] = new Vertex{ -1,0,-1 };
+cv::Vec3f cur_point_color{ 255, 255, 200 };
+cv::Vec3f cur_seg_color{ 0,255,255 };
+cv::Vec3f stored_point_color{ 100,100,50 };
+cv::Vec3f stored_seg_color{ 0,100,100 };
 
-	std::ofstream ofs{ "output.obj" };
 
-	vector<unsigned int> face{ vertices[0]->id, vertices[1]->id, vertices[2]->id, vertices[3]->id };
-	ofs << OBJ_File_Helper::create_OBJ_string(vertices, 4, &face, 1);
+CV_Data cv_data;
 
-	ofs.close();
-
-	delete[] vertices;
-}
-
-cv::Scalar get_color_pixel(const cv::Mat img, int x, int y) {
-	int cn = img.channels();
-	uint8_t* pixel_ptr = (uint8_t*)img.data;
-	int idx = x * img.cols * cn + y * cn;
-	return (pixel_ptr[idx], pixel_ptr[idx + 1], pixel_ptr[idx + 2] );
-}
-
-cv::Mat get_blue_cn(const cv::Mat& origin_img) {
-
-	cv::Mat grayscale_img(origin_img.rows, origin_img.cols, CV_8UC3, cv::Scalar(0, 0, 0));
-	uint8_t* gs_pixel_ptr = (uint8_t*)grayscale_img.data;
-	uint8_t* origin_pixel_ptr = (uint8_t*)origin_img.data;
-	int cn = origin_img.channels();
-
-	for (int i = 0; i < origin_img.rows; i++)
-	{
-		for (int j = 0; j < origin_img.cols; j++)
-		{
-			int idx = i * origin_img.cols * cn + j * cn;
-			gs_pixel_ptr[idx] = origin_pixel_ptr[idx];
-			gs_pixel_ptr[idx+1] = origin_pixel_ptr[idx];
-			gs_pixel_ptr[idx+2] = origin_pixel_ptr[idx];
-
-		}
-	}
-	return grayscale_img;
-}
-
-void slice_img(const cv::Mat& origin_img, cv::Mat& output, int gs) {
-
-	int cn = origin_img.channels();
-
-	for (int x = 0; x < origin_img.rows; x++) {
-		for (int y = 0; y < origin_img.cols; y++) {
-			if (get_color_pixel(origin_img, x, y)[0] == gs) {
-				cv::circle(output, { y,x }, 1, { 200,200,200 }, 1);
-			}
-		}
-	}
-	
-}
-
-cv::Mat get_ct_img(unsigned int* gs_weight, int gs_weight_size, int ct_count, const cv::Mat& img) {
-	if (ct_count > gs_weight_size) {
-		cout << "contour line count exceed limit" << endl;
-		exit(-1);
-	}
-	cv::Mat ct_img(img.rows, img.cols, CV_8UC3, cv::Scalar(10, 10, 10));
-
-	int cn = img.channels();
-
-	for (int i = 0; i < ct_count; i++) {
-		for (int x = 0; x < img.rows; x++) {
-			for (int y = 0; y < img.cols; y++) {
-				
-			}
-		}
-	}
-
-	return ct_img;
-}
-
-std::pair<cv::Mat, cv::Mat> get_gs_distr(const cv::Mat& img) {
+//void test_OBJ() {
+//	Vertex** vertices = new Vertex * [4];
+//	vertices[0] = new Vertex{ -1,0,1 };
+//	vertices[1] = new Vertex{ 1,1,1 };
+//	vertices[2] = new Vertex{ 1,0,-1 };
+//	vertices[3] = new Vertex{ -1,0,-1 };
+//
+//	std::ofstream ofs{ "output.obj" };
+//
+//	vector<unsigned int> face{ vertices[0]->id, vertices[1]->id, vertices[2]->id, vertices[3]->id };
+//	ofs << OBJ_File_Helper::create_OBJ_string(vertices, 4, &face, 1);
+//
+//	ofs.close();
+//
+//	delete[] vertices;
+//}
+cv::Mat get_gs_distr(const cv::Mat& img) {
 
 	unsigned int* gs_weight = new unsigned int[256] {0};
 
@@ -105,7 +53,7 @@ std::pair<cv::Mat, cv::Mat> get_gs_distr(const cv::Mat& img) {
 		for (int j = 0; j < img.cols; j++)
 		{
 			int idx = i * img.cols * cn + j * cn;
-			cur_val = origin_pixel_ptr[idx];//get blue channel value
+			cur_val = origin_pixel_ptr[idx];
 			gs_weight[cur_val]++;
 			max = max > gs_weight[cur_val] ? max : gs_weight[cur_val];
 		}
@@ -122,102 +70,310 @@ std::pair<cv::Mat, cv::Mat> get_gs_distr(const cv::Mat& img) {
 		cv::line(gs_distr_img, last_pt, cur_pt , line_color, 1);
 		last_pt = cur_pt;
 	}
-	return std::make_pair(gs_distr_img, get_ct_img(gs_weight, 256, 10, img));
+	return gs_distr_img;
 }
-struct CV_Mouse_Callback {
-	int x;
-	void CallBackFunc(int event, int x, int y, int flags, void* userdata)
-	{
-		if (event == cv::EVENT_LBUTTONDOWN)
-		{
-			cout << "Left button of the mouse is clicked - position (" << x << ", " << y << ")" << endl;
+
+void update_point_output_graph(CV_Data& cv_data) {
+	cv_data.gs_points_graph_output->setTo(cv::Scalar(0, 0, 0));
+	// draw current image base on gs
+	switch (cv_data.drawMode) {
+	case DrawMode::POINT:
+		draw_points(cv_data.cur_raw_points, *cv_data.gs_points_graph_output, cur_point_color);
+		break;
+	case DrawMode::SEGMENT:
+		draw_segs(cv_data.cur_result_points, *cv_data.gs_points_graph_output, false, cur_point_color, cur_seg_color);
+	}
+
+	// draw stored points
+	for (int i = 0; i < 255; i++) {
+		draw_segs(cv_data.recorded_points[i], *cv_data.gs_points_graph_output, false, stored_point_color, stored_seg_color);
+	}
+
+	cv::imshow("result_output", *cv_data.gs_points_graph_output);
+}
+
+void update_gs_dstr_graph(CV_Data& cv_data) {
+	cv_data.gs_dstr_graph->copyTo(*cv_data.gs_dstr_graph_output);
+	cv::line(*cv_data.gs_dstr_graph_output, { cv_data.cur_gs * 4 + 5, 0 }, { cv_data.cur_gs * 4 + 5, cv_data.gs_dstr_graph_output->rows }, { 255,0,0 }, 1);
+}
+
+void contour_update_raw_points(CV_Data& cv_data) {
+	int rows = cv_data.gray_img->rows;
+	int cols = cv_data.gray_img->cols;
+
+	cv::Mat bw;
+	cv::threshold(*cv_data.gray_img, bw, cv_data.cur_gs, 255, cv::THRESH_BINARY);
+
+	vector<vector<cv::Point> > contours;
+	vector<cv::Vec4i> hierarchy;
+
+
+	cv::findContours(bw, contours, hierarchy, cv::RETR_TREE, cv::CHAIN_APPROX_SIMPLE);
+
+	for (vector<cv::Point> points : contours) {
+		if (points.size() > cv_data.cur_raw_points.size()) {
+			cv_data.cur_raw_points = points;
 		}
 	}
-};
 
-struct CV_Runtim_Data {
-	int x = 0, y = 0;
-	void CallBackFunc(int event, int x, int y, int flags, void* userdata)
-	{
-		if (event == cv::EVENT_LBUTTONDOWN)
-		{
-			cout << "Left button of the mouse is clicked - position (" << x << ", " << y << ")" << endl;
-		}
+	//cv_data.gs_points_graph_output->setTo(cv::Scalar(0,0,0));
+	//cv_data.cur_raw_points.clear();
+	//for (int i = 0; i < rows; i++) {
+	//	for (int j = 0; j < cols; j++) {
+	//		if (get_pixel_color(*cv_data.img, i, j)[0] < cv_data.cur_gs) {
+	//			cv::circle(*cv_data.gs_points_graph_output, { j,i }, 1, { 255,255,255 }, 1);
+	//		}
+	//	}
+	//}
+	//cv::Mat canny_output;
+	//cv::Canny(*cv_data.gs_points_graph_output, canny_output, 10, 20);
+
+
+	//vector<vector<cv::Point>> contours;
+	//vector<cv::Vec4i> hierarchy;
+	//cv::findContours(canny_output, contours, hierarchy, cv::RETR_TREE, cv::CHAIN_APPROX_SIMPLE);
+
+	//for (vector<cv::Point> points : contours) {
+	//	if (points.size() > cv_data.cur_raw_points.size()) {
+	//		cv_data.cur_raw_points = points;
+	//	}
+	//}
+}
+
+void update_raw_points(CV_Data& cv_data) {
+	vector<cv::Point> all_points;
+	get_gs_points(*cv_data.gray_img, cv_data.cur_gs, all_points);
+	std::random_shuffle(all_points.begin(), all_points.end());
+	cv_data.cur_raw_points = all_points;
+}
+void update_simplified_points(CV_Data& cv_data) {
+	vector<int> seq = connect_points(cv_data.cur_raw_points);
+	vector<cv::Point> all_points_vec;
+	for (int i = 0; i < seq.size(); i++) {
+		all_points_vec.push_back(cv_data.cur_raw_points[seq[i]]);
 	}
-};
 
-void test_gs() {
+	vector<cv::Point> simplified_points;
+	RamerDouglasPeucker(all_points_vec, cv_data.RDP_epsilon, simplified_points);
+	cv_data.cur_result_points = simplified_points;
+}
 
-	cv::Mat img = cv::imread("heightmap1.png");
+void Mouse_Callback (int event, int x, int y, int flags, void* userdata) {
+	CV_Data& data = *(CV_Data*)userdata;
+	if (event == cv::EVENT_LBUTTONDOWN) {
+		data.cur_gs = (int)get_pixel_color(*data.gray_img, y, x)[0];
+		data.updated_gs = true;
+		data.drawMode = DrawMode::POINT;
+	}
+}
+void TrackBar_Callback(int, void*) {
+	cv_data.updated_RDP_epsilon = true;
+}
+
+void gs_procedure(cv::Mat img) {
+
 	if (img.empty())
 	{
 		cout << "Could not open or find the image" << endl;
 		exit(-1);
 	}
 
-	cv::namedWindow("Original_img");	
+	cv::namedWindow("gray_img");	
 	cv::namedWindow("gs_distr_output");
-	cv::namedWindow("gs_slice_output");
+	cv::namedWindow("result_output");
 
-	std::pair<cv::Mat, cv::Mat> gs_img_pair = get_gs_distr(img);
-	cv::Mat gs_dstr_img;
-	gs_img_pair.first.copyTo(gs_dstr_img);
-	cv::Mat sliced_img(img.rows, img.cols, CV_8UC3, cv::Scalar(0, 0, 0));
-	int cur_gs = 0;
 
-	slice_img(img, sliced_img, cur_gs);
+	cv::Mat gs_dstr_graph = get_gs_distr(img);
+	cv::Mat gs_dstr_graph_output;
+	gs_dstr_graph.copyTo(gs_dstr_graph_output);
+	cv::Mat gs_points_graph_output(img.rows, img.cols, CV_8UC3, cv::Scalar(0, 0, 0));
 
-	cv::imshow("Original_img", img);
-	cv::imshow("gs_distr_output", gs_dstr_img);
-	cv::imshow("gs_slice_output", sliced_img);
 
-	cv::moveWindow("Original_img", 0, 0);
+	cv_data = { &img, &gs_dstr_graph, &gs_dstr_graph_output, &gs_points_graph_output, 0, DrawMode::POINT};
+
+	cv::setMouseCallback("gray_img", Mouse_Callback, &cv_data);
+
+	vector<std::pair<int, int>> cur_gs_points;
+
+	update_raw_points(cv_data);
+
+	cv::imshow("gray_img", img);
+	cv::imshow("gs_distr_output", gs_dstr_graph_output);
+	cv::imshow("result_output", gs_points_graph_output);
+
+	cv::moveWindow("gray_img", 0, 0);
 	cv::moveWindow("gs_distr_output", img.cols, 0);
-	cv::moveWindow("gs_slice_output", 0, img.rows);
+	cv::moveWindow("result_output", 0, img.rows);
 	int cur_key;
-	while (1) {
-		cur_key = cv::waitKeyEx(0);
-		if (cur_key == UP_KEYCODE) {
-			cur_gs += 1;
-			cur_gs = cur_gs < 255 ? cur_gs : 255;
-			sliced_img.setTo(cv::Scalar(0, 0, 0));
-			slice_img(img, sliced_img, cur_gs);
-		}
-		if (cur_key == 'w') {
-			cur_gs += 10;
-			cur_gs = cur_gs < 255 ? cur_gs : 255;
-			sliced_img.setTo(cv::Scalar(0, 0, 0));
-			slice_img(img, sliced_img, cur_gs);
-		}
-		if (cur_key == DOWN_KEYCODE) {
-			cur_gs -= 1;
-			cur_gs = cur_gs > 0 ? cur_gs : 0;
-			sliced_img.setTo(cv::Scalar(0, 0, 0));
-			slice_img(img, sliced_img, cur_gs);
-		}
-		if (cur_key == 's') {
-			cur_gs -= 10;
-			cur_gs = cur_gs > 0 ? cur_gs : 0;
-			sliced_img.setTo(cv::Scalar(0, 0, 0));
-			slice_img(img, sliced_img, cur_gs);
-		}
-		cv::imshow("gs_slice_output", sliced_img);
-		gs_img_pair.first.copyTo(gs_dstr_img);
-		cv::line(gs_dstr_img, { cur_gs*4+1,0 }, { cur_gs*4+1, gs_dstr_img.rows }, { 255,0,0 }, 1);
-		cv::imshow("gs_distr_output", gs_dstr_img);
 
+	int slider_val = 0;
+
+	cv::createTrackbar("SimplifyEpsilon", "result_output", &slider_val, 100, TrackBar_Callback);
+	while (1) {
+		cv_data.RDP_epsilon = (double)slider_val / 10;
+		cur_key = cv::waitKeyEx(50);
+		if (cur_key == RIGHT_KEYCODE) {
+			cv_data.cur_gs += 1;
+			cv_data.cur_gs = cv_data.cur_gs < 255 ? cv_data.cur_gs : 255;
+			cv_data.updated_gs = true;
+		}
+		if (cur_key == LEFT_KEYCODE) {
+			cv_data.cur_gs -= 1;
+			cv_data.cur_gs = cv_data.cur_gs > 0 ? cv_data.cur_gs : 0;
+			cv_data.updated_gs = true;
+
+		}
+		if (cur_key == 'p' || cur_key == 'P') {
+			cv_data.drawMode = DrawMode::POINT;
+			cv_data.updated_gs = true;
+
+		}
+		if (cur_key == 's' || cur_key == 'S') {
+			cv_data.drawMode = DrawMode::SEGMENT;
+			cv_data.updated_RDP_epsilon = true;
+		}
+		if (cur_key == 'r' || cur_key == 'R') {
+			cv_data.updated_gs = true;
+			cv_data.updated_RDP_epsilon = true;
+		}
+		// enter
+		if (cur_key == 13) {
+			cout << "inserted" << endl;
+			cv_data.recorded_points[cv_data.cur_gs] = cv_data.cur_result_points;
+		}
+
+		bool updated = false;
+		if (cv_data.updated_gs) {
+			update_raw_points(cv_data);
+			update_gs_dstr_graph(cv_data);
+			cv::imshow("gs_distr_output", gs_dstr_graph_output);
+			cv_data.updated_gs = false;
+			updated = true;
+		}
+		if (cv_data.updated_RDP_epsilon) {
+			update_simplified_points(cv_data);
+			cv_data.updated_RDP_epsilon = false;
+			updated = true;
+		}
+		if (updated) {
+			update_point_output_graph(cv_data);
+			updated = false;
+		}
 		if (cur_key == 27) break;
 	}
 
-	cv::destroyWindow("Original_img");
+	cv::destroyWindow("gray_img");
 	cv::destroyWindow("gs_distr_output");
-	cv::destroyWindow("gs_slice_output");
-
+	cv::destroyWindow("result_output");
 
 }
 
-int main()
+void contour_finding_procedure(cv::Mat img) {
+	if (img.empty())
+	{
+		cout << "Could not open or find the image" << endl;
+		exit(-1);
+	}
+
+	cv::namedWindow("gray_img");
+	cv::namedWindow("gs_distr_output");
+	cv::namedWindow("result_output");
+
+
+	cv::Mat gs_dstr_graph = get_gs_distr(img);
+	cv::Mat gs_dstr_graph_output;
+	gs_dstr_graph.copyTo(gs_dstr_graph_output);
+	cv::Mat gs_points_graph_output(img.rows, img.cols, CV_8UC3, cv::Scalar(0, 0, 0));
+
+	cv_data = CV_Data{ &img, &gs_dstr_graph, &gs_dstr_graph_output, &gs_points_graph_output, 0, DrawMode::POINT };
+
+	cv::setMouseCallback("gray_img", Mouse_Callback, &cv_data);
+
+	vector<std::pair<int, int>> cur_gs_points;
+
+	update_raw_points(cv_data);
+
+	cv::imshow("gray_img", img);
+	cv::imshow("gs_distr_output", gs_dstr_graph_output);
+	cv::imshow("result_output", gs_points_graph_output);
+
+	cv::moveWindow("gray_img", 0, 0);
+	cv::moveWindow("gs_distr_output", img.cols, 0);
+	cv::moveWindow("result_output", 0, img.rows);
+
+
+	int cur_key;
+
+	int slider_val = 0;
+
+	cv::createTrackbar("SimplifyEpsilon", "result_output", &slider_val, 100, TrackBar_Callback);
+	while (1) {
+		cv_data.RDP_epsilon = (double)slider_val / 10;
+		cur_key = cv::waitKeyEx(50);
+		if (cur_key == RIGHT_KEYCODE) {
+			cv_data.cur_gs += 1;
+			cv_data.cur_gs = cv_data.cur_gs < 255 ? cv_data.cur_gs : 255;
+			cv_data.updated_gs = true;
+		}
+		if (cur_key == LEFT_KEYCODE) {
+			cv_data.cur_gs -= 1;
+			cv_data.cur_gs = cv_data.cur_gs > 0 ? cv_data.cur_gs : 0;
+			cv_data.updated_gs = true;
+		}
+		if (cur_key == 'p' || cur_key == 'P') {
+			cv_data.drawMode = DrawMode::POINT;
+			cv_data.updated_gs = true;
+		}
+		if (cur_key == 's' || cur_key == 'S') {
+			cv_data.drawMode = DrawMode::SEGMENT;
+			cv_data.updated_RDP_epsilon = true;
+		}
+		if (cur_key == 'r' || cur_key == 'R') {
+			cv_data.updated_gs = true;
+			cv_data.updated_RDP_epsilon = true;
+		}
+		// enter
+		if (cur_key == 13) {
+			cout << "inserted" << endl;
+			cv_data.recorded_points[cv_data.cur_gs] = cv_data.cur_result_points;
+		}
+
+		bool updated = false;
+		if (cv_data.updated_gs) {
+			contour_update_raw_points(cv_data);
+			update_gs_dstr_graph(cv_data);
+			cv::imshow("gs_distr_output", gs_dstr_graph_output);
+			cv::imshow("result_output", *cv_data.gs_points_graph_output);
+			cv_data.updated_gs = false;
+			updated = true;
+		}
+		if (cv_data.updated_RDP_epsilon) {
+			update_simplified_points(cv_data);
+			cv_data.updated_RDP_epsilon = false;
+			updated = true;
+		}
+		if (updated) {
+			update_point_output_graph(cv_data);
+			updated = false;
+		}
+		if (cur_key == 27) break;
+	}
+
+	cv::destroyWindow("gray_img");
+	cv::destroyWindow("gs_distr_output");
+	cv::destroyWindow("result_output");
+}
+
+int main(int argc, char** argv)
 {
-	test_gs();
+	cv::Mat img = cv::imread("DrawnHeightmap.png", cv::IMREAD_GRAYSCALE);
+	if (USE_LEGACY) {
+		gs_procedure(img);
+	}
+	else {
+		contour_finding_procedure(img);
+	}
+	
+
 	return 0;
 }

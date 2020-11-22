@@ -147,11 +147,14 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="Algorithm.cpp" />
     <ClCompile Include="Height2Terrain.cpp" />
     <ClCompile Include="OBJ_File_Helper.cpp" />
     <ClCompile Include="Primitives.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="Algorithm.h" />
+    <ClInclude Include="CVUtility.h" />
     <ClInclude Include="OBJ_File_Helper.h" />
     <ClInclude Include="Primitives.h" />
   </ItemGroup>

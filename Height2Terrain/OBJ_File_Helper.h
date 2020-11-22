@@ -14,6 +14,6 @@ using std::cout;
 
 using std::snprintf;
 
-namespace OBJ_File_Helper {
-	string create_OBJ_string(Vertex** vertices, int vtx_size, vector<unsigned int>* faces, int face_size);
-}
+//namespace OBJ_File_Helper {
+//	string create_OBJ_string(Vertex** vertices, int vtx_size, vector<unsigned int>* faces, int face_size);
+//}
