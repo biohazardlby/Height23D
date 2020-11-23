@@ -1,6 +1,9 @@
 #pragma once
 #include <opencv2/opencv.hpp>
 
+using std::cout;
+using std::endl;
+
 enum DrawMode {
 	POINT, SEGMENT
 };
@@ -17,6 +20,7 @@ struct CV_Data {
 	vector<cv::Point> cur_raw_points;
 	vector<cv::Point> cur_result_points;
 	vector<cv::Point>* recorded_points = new vector<cv::Point>[255];
+
 
 	double RDP_epsilon = 2;
 

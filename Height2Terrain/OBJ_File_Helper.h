@@ -3,14 +3,10 @@
 #include <sstream>
 #include <vector>
 #include <tuple>
-#include "Primitives.h"
 
 using std::string;
 using std::stringstream;
 using std::tuple;
-
-using std::endl;
-using std::cout;
 
 using std::snprintf;
 

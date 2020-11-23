@@ -1,4 +1,3 @@
-#include "Primitives.h"
 #include "OBJ_File_Helper.h"
 #include "Algorithm.h"
 #include "CVUtility.h"
@@ -8,6 +7,7 @@
 #include <time.h>
 using std::cout;
 using std::endl;
+using std::cin;
 
 #define LEFT_KEYCODE 2424832 
 #define UP_KEYCODE 2490368 
@@ -15,6 +15,8 @@ using std::endl;
 #define DOWN_KEYCODE 2621440
 
 #define USE_LEGACY false
+
+int contour_division_num = 12;
 
 cv::Vec3f cur_point_color{ 255, 255, 200 };
 cv::Vec3f cur_seg_color{ 0,255,255 };
@@ -24,23 +26,8 @@ cv::Vec3f stored_seg_color{ 0,100,100 };
 
 CV_Data cv_data;
 
-//void test_OBJ() {
-//	Vertex** vertices = new Vertex * [4];
-//	vertices[0] = new Vertex{ -1,0,1 };
-//	vertices[1] = new Vertex{ 1,1,1 };
-//	vertices[2] = new Vertex{ 1,0,-1 };
-//	vertices[3] = new Vertex{ -1,0,-1 };
-//
-//	std::ofstream ofs{ "output.obj" };
-//
-//	vector<unsigned int> face{ vertices[0]->id, vertices[1]->id, vertices[2]->id, vertices[3]->id };
-//	ofs << OBJ_File_Helper::create_OBJ_string(vertices, 4, &face, 1);
-//
-//	ofs.close();
-//
-//	delete[] vertices;
-//}
-cv::Mat get_gs_distr(const cv::Mat& img) {
+// Create grayscale distribution graph
+cv::Mat create_gs_dstr_graph(const cv::Mat& img) {
 
 	unsigned int* gs_weight = new unsigned int[256] {0};
 
@@ -97,7 +84,7 @@ void update_gs_dstr_graph(CV_Data& cv_data) {
 	cv::line(*cv_data.gs_dstr_graph_output, { cv_data.cur_gs * 4 + 5, 0 }, { cv_data.cur_gs * 4 + 5, cv_data.gs_dstr_graph_output->rows }, { 255,0,0 }, 1);
 }
 
-void contour_update_raw_points(CV_Data& cv_data) {
+void update_raw_points_contour(CV_Data& cv_data) {
 	int rows = cv_data.gray_img->rows;
 	int cols = cv_data.gray_img->cols;
 
@@ -107,57 +94,62 @@ void contour_update_raw_points(CV_Data& cv_data) {
 	vector<vector<cv::Point> > contours;
 	vector<cv::Vec4i> hierarchy;
 
-
 	cv::findContours(bw, contours, hierarchy, cv::RETR_TREE, cv::CHAIN_APPROX_SIMPLE);
 
+	vector<cv::Point> result;
 	for (vector<cv::Point> points : contours) {
-		if (points.size() > cv_data.cur_raw_points.size()) {
-			cv_data.cur_raw_points = points;
+		if (points.size() > result.size()) {
+			result = points;
 		}
 	}
-
-	//cv_data.gs_points_graph_output->setTo(cv::Scalar(0,0,0));
-	//cv_data.cur_raw_points.clear();
-	//for (int i = 0; i < rows; i++) {
-	//	for (int j = 0; j < cols; j++) {
-	//		if (get_pixel_color(*cv_data.img, i, j)[0] < cv_data.cur_gs) {
-	//			cv::circle(*cv_data.gs_points_graph_output, { j,i }, 1, { 255,255,255 }, 1);
-	//		}
-	//	}
-	//}
-	//cv::Mat canny_output;
-	//cv::Canny(*cv_data.gs_points_graph_output, canny_output, 10, 20);
-
-
-	//vector<vector<cv::Point>> contours;
-	//vector<cv::Vec4i> hierarchy;
-	//cv::findContours(canny_output, contours, hierarchy, cv::RETR_TREE, cv::CHAIN_APPROX_SIMPLE);
-
-	//for (vector<cv::Point> points : contours) {
-	//	if (points.size() > cv_data.cur_raw_points.size()) {
-	//		cv_data.cur_raw_points = points;
-	//	}
-	//}
+	cv_data.cur_raw_points = result;
+	cv_data.cur_result_points = result;
 }
 
+/// <summary>
+/// update raw points by getting all points in original image with corresponding grayscale
+/// </summary>
+/// <param name="cv_data"></param>
 void update_raw_points(CV_Data& cv_data) {
 	vector<cv::Point> all_points;
 	get_gs_points(*cv_data.gray_img, cv_data.cur_gs, all_points);
+	// shuffle to get different first head
 	std::random_shuffle(all_points.begin(), all_points.end());
 	cv_data.cur_raw_points = all_points;
 }
-void update_simplified_points(CV_Data& cv_data) {
-	vector<int> seq = connect_points(cv_data.cur_raw_points);
-	vector<cv::Point> all_points_vec;
-	for (int i = 0; i < seq.size(); i++) {
-		all_points_vec.push_back(cv_data.cur_raw_points[seq[i]]);
-	}
 
-	vector<cv::Point> simplified_points;
-	RamerDouglasPeucker(all_points_vec, cv_data.RDP_epsilon, simplified_points);
-	cv_data.cur_result_points = simplified_points;
+/// <summary>
+/// update the simplified points with current raw points
+/// </summary>
+/// <param name="cv_data"></param>
+void update_simplified_points(CV_Data& cv_data) {
+
+	if (USE_LEGACY) {
+		vector<int> seq = connect_points(cv_data.cur_raw_points);
+		vector<cv::Point> all_points_vec;
+		for (int i = 0; i < seq.size(); i++) {
+			all_points_vec.push_back(cv_data.cur_raw_points[seq[i]]);
+		}
+
+		vector<cv::Point> simplified_points;
+		RamerDouglasPeucker(all_points_vec, cv_data.RDP_epsilon, simplified_points);
+		cv_data.cur_result_points = simplified_points;
+	}
+	else {
+		vector<cv::Point> simplified_points;
+		RamerDouglasPeucker(cv_data.cur_raw_points, cv_data.RDP_epsilon, simplified_points);
+		cv_data.cur_result_points = simplified_points;
+	}
 }
 
+/// <summary>
+/// Callback Function for Opencv mouse event. Update the selected grayscale value and set the updated flag to true
+/// </summary>
+/// <param name="event"></param>
+/// <param name="x"></param>
+/// <param name="y"></param>
+/// <param name="flags"></param>
+/// <param name="userdata"></param>
 void Mouse_Callback (int event, int x, int y, int flags, void* userdata) {
 	CV_Data& data = *(CV_Data*)userdata;
 	if (event == cv::EVENT_LBUTTONDOWN) {
@@ -170,7 +162,12 @@ void TrackBar_Callback(int, void*) {
 	cv_data.updated_RDP_epsilon = true;
 }
 
-void gs_procedure(cv::Mat img) {
+/// <summary>
+/// Legacy procedure using closest point algorithm on all matching raw points,
+/// possibly produce self intersecting polygon.
+/// </summary>
+/// <param name="img"></param>
+void legacy_procedure(cv::Mat img) {
 
 	if (img.empty())
 	{
@@ -183,7 +180,7 @@ void gs_procedure(cv::Mat img) {
 	cv::namedWindow("result_output");
 
 
-	cv::Mat gs_dstr_graph = get_gs_distr(img);
+	cv::Mat gs_dstr_graph = create_gs_dstr_graph(img);
 	cv::Mat gs_dstr_graph_output;
 	gs_dstr_graph.copyTo(gs_dstr_graph_output);
 	cv::Mat gs_points_graph_output(img.rows, img.cols, CV_8UC3, cv::Scalar(0, 0, 0));
@@ -192,8 +189,6 @@ void gs_procedure(cv::Mat img) {
 	cv_data = { &img, &gs_dstr_graph, &gs_dstr_graph_output, &gs_points_graph_output, 0, DrawMode::POINT};
 
 	cv::setMouseCallback("gray_img", Mouse_Callback, &cv_data);
-
-	vector<std::pair<int, int>> cur_gs_points;
 
 	update_raw_points(cv_data);
 
@@ -237,8 +232,7 @@ void gs_procedure(cv::Mat img) {
 			cv_data.updated_RDP_epsilon = true;
 		}
 		// enter
-		if (cur_key == 13) {
-			cout << "inserted" << endl;
+		if (cur_key == 32) {
 			cv_data.recorded_points[cv_data.cur_gs] = cv_data.cur_result_points;
 		}
 
@@ -260,12 +254,30 @@ void gs_procedure(cv::Mat img) {
 			updated = false;
 		}
 		if (cur_key == 27) break;
+
+		cout << cur_key << endl;
 	}
 
 	cv::destroyWindow("gray_img");
 	cv::destroyWindow("gs_distr_output");
 	cv::destroyWindow("result_output");
 
+}
+
+void auto_simplify(CV_Data &cv_data) {
+	double i;
+	for (i = 0; i < 100; i+=0.1) {
+		if (cv_data.cur_result_points.size() != contour_division_num) {
+			cv_data.RDP_epsilon = i;
+			update_simplified_points(cv_data);
+		}
+		else {
+			break;
+		}
+	}
+	if (i >= 100) {
+		cout << "Cannot find appropriaty parameter for simplify, please select another grayscale" << endl;
+	}
 }
 
 void contour_finding_procedure(cv::Mat img) {
@@ -275,23 +287,38 @@ void contour_finding_procedure(cv::Mat img) {
 		exit(-1);
 	}
 
+	// create windows
 	cv::namedWindow("gray_img");
 	cv::namedWindow("gs_distr_output");
 	cv::namedWindow("result_output");
 
-
-	cv::Mat gs_dstr_graph = get_gs_distr(img);
+	// setup cv matrix graph
+	cv::Mat gs_dstr_graph = create_gs_dstr_graph(img);
 	cv::Mat gs_dstr_graph_output;
 	gs_dstr_graph.copyTo(gs_dstr_graph_output);
 	cv::Mat gs_points_graph_output(img.rows, img.cols, CV_8UC3, cv::Scalar(0, 0, 0));
 
+	// setup cv_data for data communication
 	cv_data = CV_Data{ &img, &gs_dstr_graph, &gs_dstr_graph_output, &gs_points_graph_output, 0, DrawMode::POINT };
 
+	// mouse input callback
 	cv::setMouseCallback("gray_img", Mouse_Callback, &cv_data);
 
-	vector<std::pair<int, int>> cur_gs_points;
-
 	update_raw_points(cv_data);
+
+	// user define edge number
+	cout << "Please enter edge number" << endl;
+	while (1) {
+		string input;
+		cin >> input;
+		try {
+			contour_division_num = std::stoi(input);
+			break;
+		}
+		catch (std::invalid_argument) {
+			cout << "Error, invalid segment number, please re-enter the contour division" << endl;
+		}
+	}
 
 	cv::imshow("gray_img", img);
 	cv::imshow("gs_distr_output", gs_dstr_graph_output);
@@ -306,6 +333,7 @@ void contour_finding_procedure(cv::Mat img) {
 
 	int slider_val = 0;
 
+	// mainloop
 	cv::createTrackbar("SimplifyEpsilon", "result_output", &slider_val, 100, TrackBar_Callback);
 	while (1) {
 		cv_data.RDP_epsilon = (double)slider_val / 10;
@@ -313,11 +341,13 @@ void contour_finding_procedure(cv::Mat img) {
 		if (cur_key == RIGHT_KEYCODE) {
 			cv_data.cur_gs += 1;
 			cv_data.cur_gs = cv_data.cur_gs < 255 ? cv_data.cur_gs : 255;
+			cv_data.drawMode = DrawMode::POINT;
 			cv_data.updated_gs = true;
 		}
 		if (cur_key == LEFT_KEYCODE) {
 			cv_data.cur_gs -= 1;
 			cv_data.cur_gs = cv_data.cur_gs > 0 ? cv_data.cur_gs : 0;
+			cv_data.drawMode = DrawMode::POINT;
 			cv_data.updated_gs = true;
 		}
 		if (cur_key == 'p' || cur_key == 'P') {
@@ -326,6 +356,7 @@ void contour_finding_procedure(cv::Mat img) {
 		}
 		if (cur_key == 's' || cur_key == 'S') {
 			cv_data.drawMode = DrawMode::SEGMENT;
+			auto_simplify(cv_data);
 			cv_data.updated_RDP_epsilon = true;
 		}
 		if (cur_key == 'r' || cur_key == 'R') {
@@ -333,14 +364,13 @@ void contour_finding_procedure(cv::Mat img) {
 			cv_data.updated_RDP_epsilon = true;
 		}
 		// enter
-		if (cur_key == 13) {
-			cout << "inserted" << endl;
+		if (cur_key == 32) {
 			cv_data.recorded_points[cv_data.cur_gs] = cv_data.cur_result_points;
 		}
 
 		bool updated = false;
 		if (cv_data.updated_gs) {
-			contour_update_raw_points(cv_data);
+			update_raw_points_contour(cv_data);
 			update_gs_dstr_graph(cv_data);
 			cv::imshow("gs_distr_output", gs_dstr_graph_output);
 			cv::imshow("result_output", *cv_data.gs_points_graph_output);
@@ -366,14 +396,12 @@ void contour_finding_procedure(cv::Mat img) {
 
 int main(int argc, char** argv)
 {
-	cv::Mat img = cv::imread("DrawnHeightmap.png", cv::IMREAD_GRAYSCALE);
+	cv::Mat img = cv::imread("hm2.jpg", cv::IMREAD_GRAYSCALE);
 	if (USE_LEGACY) {
-		gs_procedure(img);
+		legacy_procedure(img);
 	}
 	else {
 		contour_finding_procedure(img);
 	}
-	
-
 	return 0;
 }
