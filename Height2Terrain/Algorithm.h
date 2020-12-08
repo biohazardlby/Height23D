@@ -5,6 +5,8 @@
 using std::vector;
 using std::pair;
 
+double point_dist(const cv::Point& p0, const cv::Point& p1);
+
 vector<int> connect_points_tsp(const vector<cv::Point>& points);
 
 vector<int> connect_points(const vector<cv::Point>& points);

@@ -18,10 +18,10 @@ using std::cin;
 
 int contour_division_num = 12;
 
-cv::Vec3f cur_point_color{ 255, 255, 200 };
-cv::Vec3f cur_seg_color{ 0,255,255 };
-cv::Vec3f stored_point_color{ 100,100,50 };
-cv::Vec3f stored_seg_color{ 0,100,100 };
+cv::Vec3f CUR_POINT_COLOR{ 255, 255, 200 };
+cv::Vec3f CUR_SEG_COLOR{ 0,255,255 };
+cv::Vec3f STORED_POINT_COLOR{ 100,100,50 };
+cv::Vec3f STORED_SEG_COLOR{ 0,100,100 };
 
 
 CV_Data cv_data;
@@ -62,20 +62,23 @@ cv::Mat create_gs_dstr_graph(const cv::Mat& img) {
 
 void update_point_output_graph(CV_Data& cv_data) {
 	cv_data.gs_points_graph_output->setTo(cv::Scalar(0, 0, 0));
-	// draw current image base on gs
+	// draw point output image
 	switch (cv_data.drawMode) {
 	case DrawMode::POINT:
-		draw_points(cv_data.cur_raw_points, *cv_data.gs_points_graph_output, cur_point_color);
+		draw_points(cv_data.cur_raw_points, *cv_data.gs_points_graph_output, CUR_POINT_COLOR);
 		break;
 	case DrawMode::SEGMENT:
-		draw_segs(cv_data.cur_result_points, *cv_data.gs_points_graph_output, false, cur_point_color, cur_seg_color);
+		draw_contour(cv_data.cur_result_points, *cv_data.gs_points_graph_output, false, CUR_POINT_COLOR, CUR_SEG_COLOR);
 	}
 
-	// draw stored points
+	// draw stored simplified contours
 	for (int i = 0; i < 255; i++) {
-		draw_segs(cv_data.recorded_points[i], *cv_data.gs_points_graph_output, false, stored_point_color, stored_seg_color);
+		draw_contour(cv_data.contours[i], *cv_data.gs_points_graph_output, false, STORED_POINT_COLOR, STORED_SEG_COLOR);
 	}
-
+	// draw connections
+	for (int i = 0; i < cv_data.contour_connections.size(); i++) {
+		draw_seg(cv_data.contour_connections[i], *cv_data.gs_points_graph_output, false, CUR_POINT_COLOR, CUR_SEG_COLOR);
+	}
 	cv::imshow("result_output", *cv_data.gs_points_graph_output);
 }
 
@@ -139,6 +142,36 @@ void update_simplified_points(CV_Data& cv_data) {
 		vector<cv::Point> simplified_points;
 		RamerDouglasPeucker(cv_data.cur_raw_points, cv_data.RDP_epsilon, simplified_points);
 		cv_data.cur_result_points = simplified_points;
+	}
+}
+
+void auto_simplify_polygon(CV_Data& cv_data) {
+	// pick a mid value
+	double left = 0;
+	double right = 100;
+	double i = (left + right) / 2;
+	cv_data.RDP_epsilon = i;
+	update_simplified_points(cv_data);
+	int count = 0;
+	while (cv_data.cur_result_points.size() != contour_division_num+1 && count < 200) {
+		if (cv_data.cur_result_points.size() > contour_division_num+1) {
+			left = i;
+			i = (right + i) / 2;
+		}
+		else {
+			right = i;
+			i = (left + i) / 2;
+		}
+		cv_data.RDP_epsilon = i;
+		update_simplified_points(cv_data);
+		count++;
+	}
+	if (count == 200) {
+		cout << "Cannot simplify points to target division with 200 iterations, please pick another gray scale" << endl;
+		cv_data.cur_result_points.clear();
+	}
+	else {
+		cv_data.cur_result_points.erase(cv_data.cur_result_points.end()-1);
 	}
 }
 
@@ -233,7 +266,7 @@ void legacy_procedure(cv::Mat img) {
 		}
 		// enter
 		if (cur_key == 32) {
-			cv_data.recorded_points[cv_data.cur_gs] = cv_data.cur_result_points;
+			cv_data.contours[cv_data.cur_gs] = cv_data.cur_result_points;
 		}
 
 		bool updated = false;
@@ -264,20 +297,125 @@ void legacy_procedure(cv::Mat img) {
 
 }
 
-void auto_simplify(CV_Data &cv_data) {
-	double i;
-	for (i = 0; i < 100; i+=0.1) {
-		if (cv_data.cur_result_points.size() != contour_division_num) {
-			cv_data.RDP_epsilon = i;
-			update_simplified_points(cv_data);
-		}
-		else {
-			break;
-		}
+
+void generate_mesh(CV_Data& cv_data) {
+	cv_data.contour_connections.clear();
+	vector<cv::Point>* contours = cv_data.contours;
+
+	vector<vector<cv::Point>> min_dist_connections;
+
+
+	cv::Point** connections = new cv::Point * [contour_division_num];
+	for (int i = 0; i < contour_division_num; i++) {
+		connections[i] = new cv::Point[cv_data.insert_sequence.size()];
 	}
-	if (i >= 100) {
-		cout << "Cannot find appropriaty parameter for simplify, please select another grayscale" << endl;
+
+	for (int i = 0; i < contour_division_num; i++){
+		connections[i][0] = contours[cv_data.insert_sequence[0]][i];
 	}
+
+	int prev_offset = 0;
+	for (int i = 1; i < cv_data.insert_sequence.size(); i++) {
+		int contour_idx = cv_data.insert_sequence[i];
+		int prev_contour_idx = cv_data.insert_sequence[i - 1];
+
+		int min_dist_offset;
+		double min_dist_sum = DBL_MAX;
+		for (int offset = 0; offset < contour_division_num; offset++) {
+			double dist_sum = 0;
+			for (int j = 0; j < contour_division_num; j++) {
+				dist_sum += point_dist(contours[contour_idx][(j + offset) % contour_division_num], contours[prev_contour_idx][j]);
+			}
+			if (dist_sum < min_dist_sum) {
+				min_dist_sum = dist_sum;
+				min_dist_offset = offset;
+			}
+		}
+		int actual_offset = (contour_division_num + min_dist_offset - prev_offset) % contour_division_num;
+		for (int j = 0; j < contour_division_num; j++) {
+			connections[j][i] = contours[contour_idx][(j + actual_offset) % contour_division_num];
+		}
+
+		prev_offset = actual_offset;
+	}
+	
+	for (size_t i = 0; i < contour_division_num; i++) {
+		vector<cv::Point> connection;
+		for (size_t j = 0; j < cv_data.insert_sequence.size(); j++) {
+			connection.push_back(connections[i][j]);
+		}
+		cv_data.contour_connections.push_back(connection);
+	}
+
+	/*
+	* 	cv::Point center = find_center(contours[cv_data.insert_sequence[0]]);
+
+	vector<cv::Point> prev_contour;
+	for (int i = 0; i < contour_division_num; i++) {
+		prev_contour.push_back(center);
+	}
+
+
+	cv::Point** connections = new cv::Point* [contour_division_num];
+	for (int i = 0; i < contour_division_num; i++) {
+		connections[i] = new cv::Point[cv_data.insert_sequence.size()];
+	}
+
+	int insert_offset = 0;
+
+	for (int seq_idx = 0; seq_idx < cv_data.insert_sequence.size(); seq_idx++){
+		vector<cv::Point> cur_contour = contours[cv_data.insert_sequence[seq_idx]];
+
+		double max_dot = -1;
+		int max_dot_prev_idx = -1;
+
+		// pick one random point in current contour
+		size_t rand_idx = rand() % (contour_division_num - 2) + 1;
+		cv::Vec2d v0 = cv::normalize(cur_contour[rand_idx - 1] - cur_contour[rand_idx]);
+		cv::Vec2d v1 = cv::normalize(cur_contour[rand_idx + 1] - cur_contour[rand_idx]);
+		cv::Vec2d vtx_normal = cv::normalize(v0 + v1);
+
+		cv::Point vtx = cur_contour[rand_idx];
+		cv::Vec2d to_center_vec = find_center(cur_contour) - vtx;
+		if (vtx_normal.dot(to_center_vec) < 0) {
+			vtx_normal = -vtx_normal;
+		}
+		// find point in previous contour that fit with the mid vector of 
+		// random picked point in current contour
+		for (int i = 0; i < cur_contour.size(); i++) {
+			cv::Vec2d to_prev_vec = cv::normalize(prev_contour[i] - vtx);
+			double dot = to_prev_vec.dot(vtx_normal);
+			if (dot > max_dot) {
+				max_dot = dot;
+				max_dot_prev_idx = i;
+			}
+		}
+		cv_data.guide_points.push_back(prev_contour[max_dot_prev_idx]);
+		cv_data.guide_points.push_back(cur_contour[rand_idx]);
+		// locate 
+
+		// insert current contour points to connections accordingly
+		// with offset by the index of point found in previous contour
+		for (int i = 0; i < contour_division_num; i++) {
+			int output_idx = (contour_division_num + insert_offset + max_dot_prev_idx + i) % contour_division_num;
+			int pt_idx = (rand_idx + i) % contour_division_num;
+			connections[output_idx][seq_idx] = cur_contour[pt_idx];
+		}
+
+		insert_offset = (contour_division_num + insert_offset + max_dot_prev_idx - rand_idx) % contour_division_num;
+		prev_contour = cur_contour;
+	}
+
+	for (size_t i = 0; i < contour_division_num; i++) {
+		vector<cv::Point> connection;
+		for (size_t j = 0; j < cv_data.insert_sequence.size(); j++) {
+			connection.push_back(connections[i][j]);
+		}
+		cv_data.contour_connections.push_back(connection);
+	}
+	*/
+
+
 }
 
 void contour_finding_procedure(cv::Mat img) {
@@ -286,6 +424,22 @@ void contour_finding_procedure(cv::Mat img) {
 		cout << "Could not open or find the image" << endl;
 		exit(-1);
 	}
+
+
+	// user define edge number
+	cout << "Please contour division count" << endl;
+	while (1) {
+		string input;
+		cin >> input;
+		try {
+			contour_division_num = std::stoi(input);
+			break;
+		}
+		catch (std::invalid_argument) {
+			cout << "Error, invalid number, please re-enter the contour division count" << endl;
+		}
+	}
+
 
 	// create windows
 	cv::namedWindow("gray_img");
@@ -306,19 +460,6 @@ void contour_finding_procedure(cv::Mat img) {
 
 	update_raw_points(cv_data);
 
-	// user define edge number
-	cout << "Please enter edge number" << endl;
-	while (1) {
-		string input;
-		cin >> input;
-		try {
-			contour_division_num = std::stoi(input);
-			break;
-		}
-		catch (std::invalid_argument) {
-			cout << "Error, invalid segment number, please re-enter the contour division" << endl;
-		}
-	}
 
 	cv::imshow("gray_img", img);
 	cv::imshow("gs_distr_output", gs_dstr_graph_output);
@@ -333,9 +474,12 @@ void contour_finding_procedure(cv::Mat img) {
 
 	int slider_val = 0;
 
+
+	bool updated_points_output_graph = false;
 	// mainloop
 	cv::createTrackbar("SimplifyEpsilon", "result_output", &slider_val, 100, TrackBar_Callback);
 	while (1) {
+
 		cv_data.RDP_epsilon = (double)slider_val / 10;
 		cur_key = cv::waitKeyEx(50);
 		if (cur_key == RIGHT_KEYCODE) {
@@ -356,35 +500,44 @@ void contour_finding_procedure(cv::Mat img) {
 		}
 		if (cur_key == 's' || cur_key == 'S') {
 			cv_data.drawMode = DrawMode::SEGMENT;
-			auto_simplify(cv_data);
+			auto_simplify_polygon(cv_data);
 			cv_data.updated_RDP_epsilon = true;
 		}
 		if (cur_key == 'r' || cur_key == 'R') {
 			cv_data.updated_gs = true;
 			cv_data.updated_RDP_epsilon = true;
 		}
-		// enter
+		// spacebar
+		// record current simplified contour
 		if (cur_key == 32) {
-			cv_data.recorded_points[cv_data.cur_gs] = cv_data.cur_result_points;
+			cv_data.contours[cv_data.cur_gs] = cv_data.cur_result_points;
+			cv_data.insert_sequence.push_back(cv_data.cur_gs);
+		}
+		//generate mesh
+		if (cur_key == 13) {
+			cout << "Generate mesh" << endl;
+			generate_mesh(cv_data);
+			updated_points_output_graph = true;
 		}
 
-		bool updated = false;
 		if (cv_data.updated_gs) {
 			update_raw_points_contour(cv_data);
 			update_gs_dstr_graph(cv_data);
 			cv::imshow("gs_distr_output", gs_dstr_graph_output);
 			cv::imshow("result_output", *cv_data.gs_points_graph_output);
 			cv_data.updated_gs = false;
-			updated = true;
+			updated_points_output_graph = true;
 		}
 		if (cv_data.updated_RDP_epsilon) {
-			update_simplified_points(cv_data);
+			if (USE_LEGACY) {
+				update_simplified_points(cv_data);
+			}
 			cv_data.updated_RDP_epsilon = false;
-			updated = true;
+			updated_points_output_graph = true;
 		}
-		if (updated) {
+		if (updated_points_output_graph) {
 			update_point_output_graph(cv_data);
-			updated = false;
+			updated_points_output_graph = false;
 		}
 		if (cur_key == 27) break;
 	}
@@ -396,7 +549,7 @@ void contour_finding_procedure(cv::Mat img) {
 
 int main(int argc, char** argv)
 {
-	cv::Mat img = cv::imread("hm2.jpg", cv::IMREAD_GRAYSCALE);
+	cv::Mat img = cv::imread("hm2.png", cv::IMREAD_GRAYSCALE);
 	if (USE_LEGACY) {
 		legacy_procedure(img);
 	}

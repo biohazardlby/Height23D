@@ -14,6 +14,12 @@ double point_dist(int v0x, int v0y, int v1x, int v1y) {
 	return sqrt(pow(v0x - v1x, 2) + pow(v0y - v1y, 2));
 }
 
+double point_dist(const cv::Point& p0, const cv::Point& p1) {
+	return point_dist(p0.x, p0.y, p1.x, p1.y);
+}
+
+
+
 struct DLP {
 	DLP* prev = nullptr;
 	DLP* next = nullptr;

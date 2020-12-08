@@ -8,6 +8,23 @@ enum DrawMode {
 	POINT, SEGMENT
 };
 
+inline
+cv::Vec2d operator-(cv::Point p0, cv::Point p1) {
+	return cv::Vec2d(p0.x - p1.x, p0.y - p1.y);
+}
+cv::Point find_center(const vector<cv::Point> points) {
+
+	double center_x = 0, center_y = 0;
+	for (cv::Point p : points) {
+		center_x += p.x;
+		center_y += p.y;
+	}
+	center_x /= points.size();
+	center_y /= points.size();
+
+	return cv::Point(center_x, center_y);
+
+}
 struct CV_Data {
 	cv::Mat* gray_img;
 	cv::Mat* gs_dstr_graph;
@@ -19,13 +36,17 @@ struct CV_Data {
 
 	vector<cv::Point> cur_raw_points;
 	vector<cv::Point> cur_result_points;
-	vector<cv::Point>* recorded_points = new vector<cv::Point>[255];
+	vector<cv::Point>* contours = new vector<cv::Point>[255];
+	vector<vector<cv::Point>> contour_connections;
 
+	vector<int> insert_sequence;
 
 	double RDP_epsilon = 2;
 
 	bool updated_gs = false;
 	bool updated_RDP_epsilon = false;
+
+	vector<cv::Point> guide_points;
 };
 
 
@@ -79,7 +100,7 @@ void draw_points(const vector<cv::Point>& points, cv::Mat& output, cv::Vec3f col
 	}
 }
 
-void draw_segs(const vector<int>& seq, const vector<cv::Point> points, cv::Mat& output, bool printIdx, cv::Vec3f color) {
+void draw_contour(const vector<int>& seq, const vector<cv::Point> points, cv::Mat& output, bool printIdx, cv::Vec3f color) {
 	if (seq.size() != points.size()) {
 		cout << "error: sequence array size and points size does not match" << endl;
 		return;
@@ -101,18 +122,25 @@ void draw_segs(const vector<int>& seq, const vector<cv::Point> points, cv::Mat& 
 	cv::line(output, points[seq[last]], points[seq[0]], color, 1);
 }
 
-void draw_segs(const vector<cv::Point> points, cv::Mat& output, bool printIdx, cv::Vec3f pointColor, cv::Vec3f segColor) {
+void draw_contour(const vector<cv::Point> points, cv::Mat& output, bool printIdx, cv::Vec3f pointColor, cv::Vec3f segColor) {
 	vector<int> seq;
 	for (int i = 0; i < points.size(); i++) {
 		seq.push_back(i);
 	}
-	draw_segs(seq, points, output, printIdx, segColor);
+	draw_contour(seq, points, output, printIdx, segColor);
 	draw_points(points, output, pointColor);
 }
 
-//void draw_segs(vector<Seg2D>& segs, cv::Mat& output) {
-//	for (auto seg : segs) {
-//		cv::line(output, { seg.p0.x, seg.p0.y }, { seg.p1.x, seg.p1.y }, { 255,255,255 }, 1);
-//	}
-//}
+void draw_seg(vector<cv::Point> points , cv::Mat& output, bool printIdx, cv::Vec3f pointColor, cv::Vec3f segColor) {
 
+	if (points.size() < 3) return;
+
+	for (int i = 0; i < points.size() - 1; i++) {
+		if (printIdx) {
+			cv::putText(output, std::to_string(i), points[i], cv::FONT_HERSHEY_COMPLEX, .5, { 255,255,255 }, 1);
+			cout << i << points[i] << "-" << i+1 << points[i+1] << endl;
+		}
+		cv::line(output, points[i], points[i+1], segColor, 1);
+	}
+	draw_points(points, output, pointColor);
+}
